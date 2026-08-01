@@ -1,0 +1,73 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: Arial, sans-serif;
+  color: white;
+  background:
+    radial-gradient(circle at top, #302064, #090912 65%);
+}
+
+.app {
+  width: min(900px, 92%);
+  margin: auto;
+  padding: 40px 0;
+  text-align: center;
+}
+
+h1 {
+  margin-bottom: 8px;
+  font-size: 48px;
+}
+
+button {
+  margin: 24px 0;
+  padding: 12px 24px;
+  color: white;
+  font-size: 16px;
+  cursor: pointer;
+  background: #7957ff;
+  border: none;
+  border-radius: 10px;
+}
+
+button:hover {
+  transform: scale(1.04);
+}
+
+.camera-container {
+  position: relative;
+  width: min(720px, 100%);
+  margin: auto;
+  overflow: hidden;
+  background: black;
+  border: 2px solid #7957ff;
+  border-radius: 18px;
+}
+
+video,
+canvas {
+  display: block;
+  width: 100%;
+}
+
+video {
+  transform: scaleX(-1);
+}
+
+canvas {
+  position: absolute;
+  inset: 0;
+  transform: scaleX(-1);
+}
+
+.status-panel {
+  margin: 20px auto;
+  padding: 16px;
+  max-width: 500px;
+  background: rgb(255 255 255 / 8%);
+  border-radius: 14px;
+}

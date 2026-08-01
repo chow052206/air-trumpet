@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  />
+
+  <title>Air Trumpet</title>
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+  <main class="app">
+    <h1>🎺 Air Trumpet</h1>
+    <p>Pinch your thumb and index finger to play.</p>
+
+    <button id="startButton">Start Camera</button>
+
+    <section class="camera-container">
+      <video id="webcam" autoplay playsinline></video>
+      <canvas id="canvas"></canvas>
+    </section>
+
+    <div class="status-panel">
+      <p>
+        Status:
+        <strong id="status">Camera not started</strong>
+      </p>
+
+      <p>
+        Current note:
+        <strong id="currentNote">—</strong>
+      </p>
+    </div>
+
+    <div class="status-panel">
+  <p>
+    Status:
+    <strong id="status">Loading MediaPipe...</strong>
+  </p>
+
+  <p>
+    Current note:
+    <strong id="currentNote">—</strong>
+  </p>
+
+  <p>
+    Pinch distance:
+    <strong id="pinchDistance">—</strong>
+  </p>
+</div>
+
+  </main>
+
+  <script type="module" src="script.js"></script>
+</body>
+</html>
