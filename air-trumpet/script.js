@@ -51,6 +51,16 @@ const NOTES = [
 ];
 
 let isPlaying = false;
+let currentNoteIndex = -1;
+
+// Stability improvements
+const SMOOTHING_FACTOR = 0.3; // Lower = smoother but more lag (0.1-0.5)
+const PINCH_HYSTERESIS_THRESHOLD = 0.08; // Higher threshold to release than to trigger
+let previousHandY = null;
+let smoothedHandY = null;
+let isPinched = false;
+let pinchStateFrames = 0;
+const STABLE_PINCH_FRAMES = 3; // Require 3 consecutive frames to confirm pinch state change
 
 /*
  * 1. Load MediaPipe Hand Landmarker
@@ -296,7 +306,7 @@ function drawHandLandmarks(landmarks) {
 }
 
 /*
- * 5. Calculate thumb-index distance and map to musical notes
+ * 5. Calculate thumb-index distance and map to musical notes with stability improvements
  */
 function checkPinchDistance(landmarks) {
   const thumbTip = landmarks[4];
@@ -310,24 +320,52 @@ function checkPinchDistance(landmarks) {
   pinchDistanceText.textContent =
     distance.toFixed(3);
 
+  // Use hysteresis: different thresholds for entering vs leaving pinch state
+  const enterPinchThreshold = 0.06;
+  const exitPinchThreshold = PINCH_HYSTERESIS_THRESHOLD;
+
+  // Determine if we're in a pinch state with frame confirmation
+  let shouldPinch = false;
+
+  if (distance < enterPinchThreshold && !isPinched) {
+    pinchStateFrames++;
+    if (pinchStateFrames >= STABLE_PINCH_FRAMES) {
+      isPinched = true;
+      pinchStateFrames = 0;
+    }
+  } else if (distance >= exitPinchThreshold && isPinched) {
+    pinchStateFrames++;
+    if (pinchStateFrames >= STABLE_PINCH_FRAMES) {
+      isPinched = false;
+      pinchStateFrames = 0;
+    }
+  } else {
+    // Reset counter if distance is in between or state unchanged
+    pinchStateFrames = 0;
+    shouldPinch = isPinched;
+  }
+
+  shouldPinch = isPinched;
+
   // Map pinch distance to musical notes
-  // When pinched (distance < 0.06), use hand height to determine note
-  if (distance < 0.06) {
+  if (shouldPinch) {
     statusText.textContent = "Pinch detected!";
 
-    // Use the y-coordinate of the hand to determine which note to play
-    // Lower y value = hand higher in frame = higher note
-    const handY = landmarks[9].y; // Use middle finger MCP as reference point
+    // Get raw hand Y position and apply smoothing
+    const rawHandY = landmarks[9].y; // Use middle finger MCP as reference point
+    const handY = smoothHandY(rawHandY);
 
     // Map hand height to note index (0 to NOTES.length - 1)
     // Assuming handY ranges from ~0.2 (top) to ~0.8 (bottom)
     const normalizedHeight = Math.max(0, Math.min(1, (handY - 0.2) / 0.6));
     const noteIndex = Math.floor((1 - normalizedHeight) * NOTES.length);
-    const selectedNote = NOTES[Math.max(0, Math.min(NOTES.length - 1, noteIndex))];
+    const selectedNoteIndex = Math.max(0, Math.min(NOTES.length - 1, noteIndex));
+    const selectedNote = NOTES[selectedNoteIndex];
 
-    // Play the note if not already playing it
-    if (!isPlaying || currentNoteText.textContent !== selectedNote.name) {
+    // Only play if note changed to avoid re-triggering
+    if (!isPlaying || currentNoteIndex !== selectedNoteIndex) {
       playNote(selectedNote.frequency, selectedNote.name);
+      currentNoteIndex = selectedNoteIndex;
     }
   } else {
     statusText.textContent = "Hand detected";
@@ -335,10 +373,14 @@ function checkPinchDistance(landmarks) {
     // Stop playing when not pinched
     if (isPlaying) {
       stopNote();
+      currentNoteIndex = -1;
     }
 
     pinchDistanceText.textContent = distance.toFixed(3);
     currentNoteText.textContent = "—";
+
+    // Reset smoothing when not pinched
+    smoothedHandY = null;
   }
 }
 
@@ -355,6 +397,18 @@ function calculateDistance(pointA, pointB) {
     deltaY ** 2 +
     deltaZ ** 2
   );
+}
+
+/*
+ * Apply exponential moving average smoothing to hand Y position
+ */
+function smoothHandY(rawY) {
+  if (smoothedHandY === null) {
+    smoothedHandY = rawY;
+  } else {
+    smoothedHandY = SMOOTHING_FACTOR * rawY + (1 - SMOOTHING_FACTOR) * smoothedHandY;
+  }
+  return smoothedHandY;
 }
 
 /*
