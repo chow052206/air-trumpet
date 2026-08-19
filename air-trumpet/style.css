@@ -71,3 +71,21 @@ canvas {
   background: rgb(255 255 255 / 8%);
   border-radius: 14px;
 }
+
+.info-panel {
+  margin: 20px auto;
+  padding: 16px;
+  max-width: 500px;
+  background: rgb(121 87 255 / 15%);
+  border-radius: 14px;
+  text-align: left;
+}
+
+.info-panel ol {
+  margin: 10px 0;
+  padding-left: 20px;
+}
+
+.info-panel li {
+  margin: 6px 0;
+}
