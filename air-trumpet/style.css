@@ -89,3 +89,79 @@ canvas {
 .info-panel li {
   margin: 6px 0;
 }
+
+/* ============================= */
+/* PITCH GUIDE */
+/* ============================= */
+
+.pitch-guide {
+  position: absolute;
+  top: 8%;
+  bottom: 8%;
+  left: 20px;
+
+  width: 90px;
+
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+
+  pointer-events: none;
+
+  z-index: 10;
+}
+
+.pitch-note {
+  display: flex;
+  align-items: center;
+
+  gap: 8px;
+
+  font-size: 12px;
+  font-weight: bold;
+
+  color: rgba(255, 255, 255, 0.45);
+
+  transition:
+    color 0.15s ease,
+    transform 0.15s ease,
+    text-shadow 0.15s ease;
+}
+
+/* horizontal pitch line */
+
+.pitch-note::after {
+  content: "";
+
+  width: 35px;
+  height: 1px;
+
+  background:
+    rgba(255, 255, 255, 0.25);
+}
+
+
+/* Current note */
+
+.pitch-note.active {
+  color: white;
+
+  transform:
+    translateX(8px)
+    scale(1.25);
+
+  text-shadow:
+    0 0 8px white;
+}
+
+
+/* Make active line brighter */
+
+.pitch-note.active::after {
+  height: 2px;
+
+  background: white;
+
+  box-shadow:
+    0 0 8px white;
+}

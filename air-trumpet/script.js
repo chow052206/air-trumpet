@@ -4,6 +4,11 @@ import {
   DrawingUtils
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest";
 
+
+// ======================================================
+// HTML ELEMENTS
+// ======================================================
+
 const video = document.querySelector("#webcam");
 const canvas = document.querySelector("#canvas");
 const canvasContext = canvas.getContext("2d");
@@ -13,19 +18,41 @@ const statusText = document.querySelector("#status");
 const currentNoteText = document.querySelector("#currentNote");
 const pinchDistanceText = document.querySelector("#pinchDistance");
 
+
+// ======================================================
+// MEDIAPIPE VARIABLES
+// ======================================================
+
 let handLandmarker = null;
 let drawingUtils = null;
 
 let cameraRunning = false;
 let lastVideoTime = -1;
 
-// Audio context for generating trumpet sounds
+
+// ======================================================
+// AUDIO VARIABLES
+// ======================================================
+
 let audioContext = null;
-let activeOscillator = null;
+
+let trumpetBuffer = null;
+
+let activeSource = null;
 let activeGainNode = null;
 
-// Musical notes configuration (chromatic scale starting from C4)
+
+// Our trumpet sample is C4
+const BASE_FREQUENCY = 261.63;
+
+
+// ======================================================
+// MUSICAL NOTES
+// C4 → A5
+// ======================================================
+
 const NOTES = [
+
   { name: "C4", frequency: 261.63 },
   { name: "C#4", frequency: 277.18 },
   { name: "D4", frequency: 293.66 },
@@ -38,6 +65,7 @@ const NOTES = [
   { name: "A4", frequency: 440.00 },
   { name: "A#4", frequency: 466.16 },
   { name: "B4", frequency: 493.88 },
+
   { name: "C5", frequency: 523.25 },
   { name: "C#5", frequency: 554.37 },
   { name: "D5", frequency: 587.33 },
@@ -48,384 +76,1187 @@ const NOTES = [
   { name: "G5", frequency: 783.99 },
   { name: "G#5", frequency: 830.61 },
   { name: "A5", frequency: 880.00 }
+
 ];
 
+
 let isPlaying = false;
+
 let currentNoteIndex = -1;
 
-// Stability improvements
-const SMOOTHING_FACTOR = 0.3; // Lower = smoother but more lag (0.1-0.5)
-const PINCH_HYSTERESIS_THRESHOLD = 0.08; // Higher threshold to release than to trigger
-let previousHandY = null;
+
+// ======================================================
+// STABILITY SETTINGS
+// ======================================================
+
+// Smaller number = smoother,
+// but slightly slower response.
+
+const SMOOTHING_FACTOR = 0.3;
+
+
+// Pinch starts here
+
+const ENTER_PINCH_THRESHOLD = 0.06;
+
+
+// Pinch releases here
+
+const EXIT_PINCH_THRESHOLD = 0.08;
+
+
+// Require 3 frames before changing state
+
+const STABLE_PINCH_FRAMES = 3;
+
+
 let smoothedHandY = null;
+
 let isPinched = false;
+
 let pinchStateFrames = 0;
-const STABLE_PINCH_FRAMES = 3; // Require 3 consecutive frames to confirm pinch state change
 
-/*
- * 1. Load MediaPipe Hand Landmarker
- */
+
+// ======================================================
+// 1. INITIALIZE MEDIAPIPE
+// ======================================================
+
 async function initializeHandLandmarker() {
-  try {
-    statusText.textContent = "Loading hand detection model...";
 
-    const vision = await FilesetResolver.forVisionTasks(
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+  try {
+
+    statusText.textContent =
+      "Loading hand detection model...";
+
+
+    const vision =
+      await FilesetResolver.forVisionTasks(
+
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+
+      );
+
+
+    handLandmarker =
+      await HandLandmarker.createFromOptions(
+
+        vision,
+
+        {
+
+          baseOptions: {
+
+            modelAssetPath:
+
+              "https://storage.googleapis.com/" +
+              "mediapipe-models/" +
+              "hand_landmarker/" +
+              "hand_landmarker/" +
+              "float16/1/" +
+              "hand_landmarker.task",
+
+            delegate: "GPU"
+
+          },
+
+
+          runningMode: "VIDEO",
+
+          numHands: 1,
+
+
+          minHandDetectionConfidence: 0.5,
+
+          minHandPresenceConfidence: 0.5,
+
+          minTrackingConfidence: 0.5
+
+        }
+
+      );
+
+
+    drawingUtils =
+      new DrawingUtils(canvasContext);
+
+
+    statusText.textContent =
+      "Model ready";
+
+
+    startButton.disabled = false;
+
+
+  } catch (error) {
+
+    console.error(
+      "MediaPipe initialization error:",
+      error
     );
 
-    handLandmarker = await HandLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath:
-          "https://storage.googleapis.com/mediapipe-models/" +
-          "hand_landmarker/hand_landmarker/float16/1/" +
-          "hand_landmarker.task",
-
-        delegate: "GPU"
-      },
-
-      runningMode: "VIDEO",
-
-      numHands: 1,
-
-      minHandDetectionConfidence: 0.5,
-      minHandPresenceConfidence: 0.5,
-      minTrackingConfidence: 0.5
-    });
-
-    drawingUtils = new DrawingUtils(canvasContext);
-
-    statusText.textContent = "Model ready";
-    startButton.disabled = false;
-  } catch (error) {
-    console.error("MediaPipe initialization error:", error);
 
     statusText.textContent =
       "Failed to load hand detection model";
+
   }
+
 }
 
-/*
- * 2. Start camera
- */
-startButton.addEventListener("click", async () => {
-  if (!handLandmarker) {
-    statusText.textContent = "Model is still loading";
-    return;
+
+// ======================================================
+// 2. START CAMERA
+// ======================================================
+
+startButton.addEventListener(
+  "click",
+
+  async () => {
+
+    if (!handLandmarker) {
+
+      statusText.textContent =
+        "Model is still loading";
+
+      return;
+
+    }
+
+
+    if (
+      !navigator.mediaDevices ||
+      !navigator.mediaDevices.getUserMedia
+    ) {
+
+      statusText.textContent =
+        "Camera is not supported by this browser";
+
+      return;
+
+    }
+
+
+    try {
+
+      // Initialize audio after user interaction
+
+      await initializeAudioContext();
+
+
+      const stream =
+        await navigator.mediaDevices.getUserMedia({
+
+          video: {
+
+            width: 1280,
+
+            height: 720
+
+          },
+
+          audio: false
+
+        });
+
+
+      video.srcObject = stream;
+
+
+      video.addEventListener(
+
+        "loadeddata",
+
+        () => {
+
+          cameraRunning = true;
+
+
+          startButton.textContent =
+            "Camera Active";
+
+
+          startButton.disabled = true;
+
+
+          statusText.textContent =
+            "Show your hand";
+
+
+          predictWebcam();
+
+        },
+
+        { once: true }
+
+      );
+
+
+    } catch (error) {
+
+      console.error(
+        "Camera / Audio error:",
+        error
+      );
+
+
+      statusText.textContent =
+        "Camera or audio failed to start";
+
+    }
+
   }
 
-  if (!navigator.mediaDevices?.getUserMedia) {
+);
+
+
+// ======================================================
+// 3. INITIALIZE AUDIO
+// ======================================================
+
+async function initializeAudioContext() {
+
+  if (!audioContext) {
+
+    audioContext =
+      new (
+        window.AudioContext ||
+        window.webkitAudioContext
+      )();
+
+  }
+
+
+  if (
+    audioContext.state === "suspended"
+  ) {
+
+    await audioContext.resume();
+
+  }
+
+
+  // Load trumpet sample only once
+
+  if (!trumpetBuffer) {
+
     statusText.textContent =
-      "Camera is not supported by this browser";
-    return;
-  }
+      "Loading trumpet sound...";
 
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        width: 1280,
-        height: 720
-      },
 
-      audio: false
-    });
+    const response =
+      await fetch(
+        "./sounds/trumpet-c4.wav"
+      );
 
-    video.srcObject = stream;
 
-    video.addEventListener(
-      "loadeddata",
-      () => {
-        cameraRunning = true;
+    if (!response.ok) {
 
-        startButton.textContent = "Camera Active";
-        startButton.disabled = true;
+      throw new Error(
+        "Could not find trumpet-c4.wav"
+      );
 
-        statusText.textContent = "Show your hand";
+    }
 
-        // Initialize audio context on user interaction
-        initializeAudioContext();
 
-        predictWebcam();
-      },
-      { once: true }
+    const arrayBuffer =
+      await response.arrayBuffer();
+
+
+    trumpetBuffer =
+      await audioContext.decodeAudioData(
+        arrayBuffer
+      );
+
+
+    console.log(
+      "🎺 Trumpet sample loaded!"
     );
-  } catch (error) {
-    console.error("Camera error:", error);
 
-    statusText.textContent =
-      "Camera permission denied or unavailable";
   }
-});
 
-/*
- * Initialize Web Audio API context
- */
-function initializeAudioContext() {
-  if (!audioContext) {
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-  }
 }
 
-/*
- * Play a trumpet-like sound at the given frequency
- */
-function playNote(frequency, noteName) {
-  if (!audioContext) {
-    initializeAudioContext();
+
+// ======================================================
+// 4. PLAY TRUMPET NOTE
+// ======================================================
+
+function playNote(
+  frequency,
+  noteName
+) {
+
+  if (
+    !audioContext ||
+    !trumpetBuffer
+  ) {
+
+    console.warn(
+      "Trumpet sample is not ready."
+    );
+
+    return;
+
   }
 
-  // Stop any currently playing note
+
+  // Stop previous note
+
   stopNote();
 
-  // Create oscillator for the tone
-  activeOscillator = audioContext.createOscillator();
-  activeGainNode = audioContext.createGain();
 
-  // Use sawtooth wave for a brass-like sound
-  activeOscillator.type = "sawtooth";
-  activeOscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+  // Create audio source
 
-  // Add some harmonics with a second oscillator
-  const harmonicOscillator = audioContext.createOscillator();
-  const harmonicGain = audioContext.createGain();
-  harmonicOscillator.type = "square";
-  harmonicOscillator.frequency.setValueAtTime(frequency * 2, audioContext.currentTime);
-  harmonicGain.gain.setValueAtTime(0.3, audioContext.currentTime);
+  activeSource =
+    audioContext.createBufferSource();
 
-  // Connect oscillators to gain
-  activeOscillator.connect(activeGainNode);
-  harmonicOscillator.connect(harmonicGain);
-  harmonicGain.connect(activeGainNode);
-  activeGainNode.connect(audioContext.destination);
 
-  // Attack envelope - quick fade in to avoid clicking
-  activeGainNode.gain.setValueAtTime(0, audioContext.currentTime);
-  activeGainNode.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + 0.05);
+  activeGainNode =
+    audioContext.createGain();
 
-  // Start oscillators
-  activeOscillator.start();
-  harmonicOscillator.start();
+
+  activeSource.buffer =
+    trumpetBuffer;
+
+
+  // Loop while pinching
+
+  activeSource.loop = true;
+
+
+  // ====================================================
+  // PITCH SHIFT
+  // ====================================================
+
+  /*
+      Original audio = C4
+
+      C4:
+      261.63 / 261.63 = 1
+
+      C5:
+      523.25 / 261.63 = 2
+
+      Therefore playbackRate changes
+      the trumpet pitch.
+  */
+
+
+  const playbackRate =
+    frequency / BASE_FREQUENCY;
+
+
+  activeSource.playbackRate
+    .setValueAtTime(
+
+      playbackRate,
+
+      audioContext.currentTime
+
+    );
+
+
+  // ====================================================
+  // VOLUME ATTACK
+  // ====================================================
+
+  const now =
+    audioContext.currentTime;
+
+
+  activeGainNode.gain
+    .setValueAtTime(
+
+      0,
+
+      now
+
+    );
+
+
+  activeGainNode.gain
+    .linearRampToValueAtTime(
+
+      0.6,
+
+      now + 0.05
+
+    );
+
+
+  // ====================================================
+  // CONNECT AUDIO
+  // ====================================================
+
+  activeSource.connect(
+    activeGainNode
+  );
+
+
+  activeGainNode.connect(
+    audioContext.destination
+  );
+
+
+  activeSource.start();
+
 
   isPlaying = true;
-  currentNoteText.textContent = noteName;
-  statusText.textContent = `Playing ${noteName}`;
+
+
+  // Update UI
+
+  currentNoteText.textContent =
+    noteName;
+
+
+  statusText.textContent =
+    `🎺 Playing ${noteName}`;
+
+
+  // Highlight pitch guide
+
+  updatePitchGuide(
+    noteName
+  );
+
 }
 
-/*
- * Stop the currently playing note
- */
+
+// ======================================================
+// 5. STOP TRUMPET NOTE
+// ======================================================
+
 function stopNote() {
-  if (activeGainNode && audioContext) {
-    // Release envelope - quick fade out
-    activeGainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.1);
 
-    if (activeOscillator) {
-      activeOscillator.stop(audioContext.currentTime + 0.1);
-    }
+  if (
+    activeSource &&
+    activeGainNode &&
+    audioContext
+  ) {
+
+    const now =
+      audioContext.currentTime;
+
+
+    activeGainNode.gain
+      .cancelScheduledValues(
+        now
+      );
+
+
+    activeGainNode.gain
+      .setValueAtTime(
+
+        activeGainNode.gain.value,
+
+        now
+
+      );
+
+
+    // Small fade out
+
+    activeGainNode.gain
+      .linearRampToValueAtTime(
+
+        0,
+
+        now + 0.08
+
+      );
+
+
+    const sourceToStop =
+      activeSource;
+
+
+    setTimeout(
+
+      () => {
+
+        try {
+
+          sourceToStop.stop();
+
+        }
+
+        catch (error) {
+
+          // Source already stopped
+
+        }
+
+      },
+
+      100
+
+    );
+
   }
 
-  activeOscillator = null;
+
+  activeSource = null;
+
   activeGainNode = null;
+
+
   isPlaying = false;
-  currentNoteText.textContent = "—";
+
+
+  currentNoteText.textContent =
+    "—";
+
+
+  clearPitchGuide();
+
 }
 
-/*
- * 3. Continuously detect hands
- */
+
+// ======================================================
+// 6. CAMERA DETECTION LOOP
+// ======================================================
+
 async function predictWebcam() {
-  if (!cameraRunning || !handLandmarker) {
+
+  if (
+    !cameraRunning ||
+    !handLandmarker
+  ) {
+
     return;
+
   }
+
 
   resizeCanvas();
 
-  const currentTime = performance.now();
+
+  const currentTime =
+    performance.now();
+
 
   let results = null;
 
-  /*
-   * Only process the video when it has moved
-   * to a new frame.
-   */
-  if (video.currentTime !== lastVideoTime) {
-    lastVideoTime = video.currentTime;
 
-    results = handLandmarker.detectForVideo(
-      video,
-      currentTime
-    );
+  // Only detect on new video frames
+
+  if (
+    video.currentTime !==
+    lastVideoTime
+  ) {
+
+    lastVideoTime =
+      video.currentTime;
+
+
+    results =
+      handLandmarker.detectForVideo(
+
+        video,
+
+        currentTime
+
+      );
+
   }
 
-  /*
-   * Clear the previous canvas drawing.
-   */
+
+  // Clear previous hand skeleton
+
   canvasContext.clearRect(
+
     0,
+
     0,
+
     canvas.width,
+
     canvas.height
+
   );
+
+
+  // ====================================================
+  // HAND FOUND
+  // ====================================================
 
   if (
     results &&
     results.landmarks &&
     results.landmarks.length > 0
   ) {
-    const landmarks = results.landmarks[0];
 
-    statusText.textContent = "Hand detected";
+    const landmarks =
+      results.landmarks[0];
 
-    drawHandLandmarks(landmarks);
-    checkPinchDistance(landmarks);
-  } else {
-    statusText.textContent = "Show your hand";
 
-    pinchDistanceText.textContent = "—";
-    currentNoteText.textContent = "—";
+    statusText.textContent =
+      "Hand detected";
+
+
+    drawHandLandmarks(
+      landmarks
+    );
+
+
+    checkPinchDistance(
+      landmarks
+    );
+
   }
 
-  window.requestAnimationFrame(predictWebcam);
-}
 
-/*
- * 4. Draw hand skeleton
- */
-function drawHandLandmarks(landmarks) {
-  drawingUtils.drawConnectors(
-    landmarks,
-    HandLandmarker.HAND_CONNECTIONS,
-    {
-      lineWidth: 4
+  // ====================================================
+  // NO HAND
+  // ====================================================
+
+  else {
+
+    statusText.textContent =
+      "Show your hand";
+
+
+    pinchDistanceText.textContent =
+      "—";
+
+
+    currentNoteText.textContent =
+      "—";
+
+
+    if (isPlaying) {
+
+      stopNote();
+
     }
+
+
+    currentNoteIndex = -1;
+
+    isPinched = false;
+
+    pinchStateFrames = 0;
+
+    smoothedHandY = null;
+
+
+    clearPitchGuide();
+
+  }
+
+
+  window.requestAnimationFrame(
+    predictWebcam
   );
 
-  drawingUtils.drawLandmarks(landmarks, {
-    radius: 5,
-    lineWidth: 2
-  });
 }
 
-/*
- * 5. Calculate thumb-index distance and map to musical notes with stability improvements
- */
-function checkPinchDistance(landmarks) {
-  const thumbTip = landmarks[4];
-  const indexFingerTip = landmarks[8];
 
-  const distance = calculateDistance(
-    thumbTip,
-    indexFingerTip
+// ======================================================
+// 7. DRAW HAND LANDMARKS
+// ======================================================
+
+function drawHandLandmarks(
+  landmarks
+) {
+
+  drawingUtils.drawConnectors(
+
+    landmarks,
+
+    HandLandmarker.HAND_CONNECTIONS,
+
+    {
+
+      lineWidth: 4
+
+    }
+
   );
+
+
+  drawingUtils.drawLandmarks(
+
+    landmarks,
+
+    {
+
+      radius: 5,
+
+      lineWidth: 2
+
+    }
+
+  );
+
+}
+
+
+// ======================================================
+// 8. PINCH DETECTION
+// ======================================================
+
+function checkPinchDistance(
+  landmarks
+) {
+
+  const thumbTip =
+    landmarks[4];
+
+
+  const indexFingerTip =
+    landmarks[8];
+
+
+  const distance =
+    calculateDistance(
+
+      thumbTip,
+
+      indexFingerTip
+
+    );
+
 
   pinchDistanceText.textContent =
     distance.toFixed(3);
 
-  // Use hysteresis: different thresholds for entering vs leaving pinch state
-  const enterPinchThreshold = 0.06;
-  const exitPinchThreshold = PINCH_HYSTERESIS_THRESHOLD;
 
-  // Determine if we're in a pinch state with frame confirmation
-  let shouldPinch = false;
+  // ====================================================
+  // START PINCH
+  // ====================================================
 
-  if (distance < enterPinchThreshold && !isPinched) {
+  if (
+    distance <
+      ENTER_PINCH_THRESHOLD &&
+
+    !isPinched
+  ) {
+
     pinchStateFrames++;
-    if (pinchStateFrames >= STABLE_PINCH_FRAMES) {
+
+
+    if (
+      pinchStateFrames >=
+      STABLE_PINCH_FRAMES
+    ) {
+
       isPinched = true;
+
       pinchStateFrames = 0;
+
     }
-  } else if (distance >= exitPinchThreshold && isPinched) {
+
+  }
+
+
+  // ====================================================
+  // RELEASE PINCH
+  // ====================================================
+
+  else if (
+    distance >=
+      EXIT_PINCH_THRESHOLD &&
+
+    isPinched
+  ) {
+
     pinchStateFrames++;
-    if (pinchStateFrames >= STABLE_PINCH_FRAMES) {
+
+
+    if (
+      pinchStateFrames >=
+      STABLE_PINCH_FRAMES
+    ) {
+
       isPinched = false;
+
       pinchStateFrames = 0;
+
     }
-  } else {
-    // Reset counter if distance is in between or state unchanged
+
+  }
+
+
+  else {
+
     pinchStateFrames = 0;
-    shouldPinch = isPinched;
+
   }
 
-  shouldPinch = isPinched;
 
-  // Map pinch distance to musical notes
-  if (shouldPinch) {
-    statusText.textContent = "Pinch detected!";
+  // ====================================================
+  // CURRENTLY PINCHING
+  // ====================================================
 
-    // Get raw hand Y position and apply smoothing
-    const rawHandY = landmarks[9].y; // Use middle finger MCP as reference point
-    const handY = smoothHandY(rawHandY);
+  if (isPinched) {
 
-    // Map hand height to note index (0 to NOTES.length - 1)
-    // Assuming handY ranges from ~0.2 (top) to ~0.8 (bottom)
-    const normalizedHeight = Math.max(0, Math.min(1, (handY - 0.2) / 0.6));
-    const noteIndex = Math.floor((1 - normalizedHeight) * NOTES.length);
-    const selectedNoteIndex = Math.max(0, Math.min(NOTES.length - 1, noteIndex));
-    const selectedNote = NOTES[selectedNoteIndex];
+    /*
+        Landmark 9 =
+        middle finger MCP.
 
-    // Only play if note changed to avoid re-triggering
-    if (!isPlaying || currentNoteIndex !== selectedNoteIndex) {
-      playNote(selectedNote.frequency, selectedNote.name);
-      currentNoteIndex = selectedNoteIndex;
+        This is more stable than
+        using the fingertip.
+    */
+
+
+    const rawHandY =
+      landmarks[9].y;
+
+
+    const handY =
+      smoothHandY(
+        rawHandY
+      );
+
+
+    // ==================================================
+    // MAP HAND HEIGHT
+    // ==================================================
+
+    /*
+        Camera coordinate:
+
+        TOP
+        y = 0
+        ↓
+        y = 1
+        BOTTOM
+
+
+        Useful playing range:
+
+        0.2 → top
+        0.8 → bottom
+    */
+
+
+    const normalizedHeight =
+      Math.max(
+
+        0,
+
+        Math.min(
+
+          1,
+
+          (handY - 0.2) / 0.6
+
+        )
+
+      );
+
+
+    // Reverse because higher hand
+    // should produce higher pitch
+
+
+    const noteIndex =
+      Math.floor(
+
+        (1 - normalizedHeight) *
+        NOTES.length
+
+      );
+
+
+    const selectedNoteIndex =
+      Math.max(
+
+        0,
+
+        Math.min(
+
+          NOTES.length - 1,
+
+          noteIndex
+
+        )
+
+      );
+
+
+    const selectedNote =
+      NOTES[
+        selectedNoteIndex
+      ];
+
+
+    // ==================================================
+    // PLAY ONLY WHEN NOTE CHANGES
+    // ==================================================
+
+    if (
+      !isPlaying ||
+
+      currentNoteIndex !==
+        selectedNoteIndex
+    ) {
+
+      playNote(
+
+        selectedNote.frequency,
+
+        selectedNote.name
+
+      );
+
+
+      currentNoteIndex =
+        selectedNoteIndex;
+
     }
-  } else {
-    statusText.textContent = "Hand detected";
 
-    // Stop playing when not pinched
+  }
+
+
+  // ====================================================
+  // NOT PINCHING
+  // ====================================================
+
+  else {
+
+    statusText.textContent =
+      "Hand detected";
+
+
     if (isPlaying) {
+
       stopNote();
-      currentNoteIndex = -1;
+
     }
 
-    pinchDistanceText.textContent = distance.toFixed(3);
-    currentNoteText.textContent = "—";
 
-    // Reset smoothing when not pinched
+    currentNoteIndex = -1;
+
+
+    currentNoteText.textContent =
+      "—";
+
+
     smoothedHandY = null;
+
+
+    clearPitchGuide();
+
   }
+
 }
 
-/*
- * Calculate 3D distance between two landmarks.
- */
-function calculateDistance(pointA, pointB) {
-  const deltaX = pointA.x - pointB.x;
-  const deltaY = pointA.y - pointB.y;
-  const deltaZ = pointA.z - pointB.z;
+
+// ======================================================
+// 9. CALCULATE LANDMARK DISTANCE
+// ======================================================
+
+function calculateDistance(
+  pointA,
+  pointB
+) {
+
+  const deltaX =
+    pointA.x - pointB.x;
+
+
+  const deltaY =
+    pointA.y - pointB.y;
+
+
+  const deltaZ =
+    pointA.z - pointB.z;
+
 
   return Math.sqrt(
+
     deltaX ** 2 +
+
     deltaY ** 2 +
+
     deltaZ ** 2
+
   );
+
 }
 
-/*
- * Apply exponential moving average smoothing to hand Y position
- */
-function smoothHandY(rawY) {
-  if (smoothedHandY === null) {
-    smoothedHandY = rawY;
-  } else {
-    smoothedHandY = SMOOTHING_FACTOR * rawY + (1 - SMOOTHING_FACTOR) * smoothedHandY;
-  }
-  return smoothedHandY;
-}
 
-/*
- * Make canvas match the actual video dimensions.
- */
-function resizeCanvas() {
+// ======================================================
+// 10. SMOOTH HAND MOVEMENT
+// ======================================================
+
+function smoothHandY(
+  rawY
+) {
+
   if (
-    canvas.width !== video.videoWidth ||
-    canvas.height !== video.videoHeight
+    smoothedHandY === null
   ) {
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+
+    smoothedHandY =
+      rawY;
+
   }
+
+  else {
+
+    smoothedHandY =
+
+      SMOOTHING_FACTOR *
+      rawY +
+
+      (
+        1 -
+        SMOOTHING_FACTOR
+      ) *
+      smoothedHandY;
+
+  }
+
+
+  return smoothedHandY;
+
 }
 
-/*
- * Start loading MediaPipe immediately.
- */
+
+// ======================================================
+// 11. UPDATE PITCH GUIDE
+// ======================================================
+
+function updatePitchGuide(
+  noteName
+) {
+
+  const pitchNotes =
+    document.querySelectorAll(
+      ".pitch-note"
+    );
+
+
+  // Remove previous highlight
+
+  pitchNotes.forEach(
+    (element) => {
+
+      element.classList.remove(
+        "active"
+      );
+
+    }
+  );
+
+
+  // ====================================================
+  // EXACT NOTE
+  // ====================================================
+
+  let target =
+    document.querySelector(
+
+      `.pitch-note[data-note="${noteName}"]`
+
+    );
+
+
+  // ====================================================
+  // SHARP NOTE
+  // ====================================================
+
+  /*
+      Pitch guide only displays
+      natural notes.
+
+      Example:
+
+      F#4 → highlight F4
+      G#4 → highlight G4
+  */
+
+
+  if (!target) {
+
+    const naturalNote =
+      noteName.replace(
+        "#",
+        ""
+      );
+
+
+    target =
+      document.querySelector(
+
+        `.pitch-note[data-note="${naturalNote}"]`
+
+      );
+
+  }
+
+
+  if (target) {
+
+    target.classList.add(
+      "active"
+    );
+
+  }
+
+}
+
+
+// ======================================================
+// 12. CLEAR PITCH GUIDE
+// ======================================================
+
+function clearPitchGuide() {
+
+  const pitchNotes =
+    document.querySelectorAll(
+      ".pitch-note"
+    );
+
+
+  pitchNotes.forEach(
+    (element) => {
+
+      element.classList.remove(
+        "active"
+      );
+
+    }
+  );
+
+}
+
+
+// ======================================================
+// 13. RESIZE CANVAS
+// ======================================================
+
+function resizeCanvas() {
+
+  if (
+
+    canvas.width !==
+      video.videoWidth ||
+
+    canvas.height !==
+      video.videoHeight
+
+  ) {
+
+    canvas.width =
+      video.videoWidth;
+
+
+    canvas.height =
+      video.videoHeight;
+
+  }
+
+}
+
+
+// ======================================================
+// START PROGRAM
+// ======================================================
+
 startButton.disabled = true;
+
 initializeHandLandmarker();
